@@ -56,7 +56,7 @@ install(
 )
 
 install(
-    DIRECTORY ${OpenCV_INSTALL_PATH}/lib64/
+    DIRECTORY ${OpenCV_INSTALL_PATH}/lib/
     DESTINATION "testkit"
     COMPONENT testkit
     USE_SOURCE_PERMISSIONS
