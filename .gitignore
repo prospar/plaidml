@@ -60,3 +60,7 @@ tags
 
 # CMake stuff
 build-*/
+
+# PROSPAR
+pmlc/target/x86/tests/log*
+pmlc/target/x86/tests/temp*
