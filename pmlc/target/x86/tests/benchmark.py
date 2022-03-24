@@ -33,6 +33,10 @@ def calcInputDim(o, f, s):
     return (o - 1) * s + f
 
 
+def calcOutputDim(i, f, s):
+    return int((i - f) / s) + 1
+
+
 def getShapeFromDims(dims):
     shape = ""
     for d in dims:
@@ -157,20 +161,20 @@ def parserow(row, blockSize):
     OMAP = "(n, h, w, c, r, s, k) -> (n, h, w, c)"
     ROMAP = "(d0, d1, d2, d3, d4, d5, d6, d7, d8) -> (d0, d7, d1, d2, d3)"
 
-    out_batches = 1
-    out_height = int(row[" IFMAP Height"].strip())
-    out_width = int(row[" IFMAP Width"].strip())
-    out_channels = int(row[" Num Filter"].strip())
+    inp_batches = 1
+    inp_height = int(row[" IFMAP Height"].strip())
+    inp_width = int(row[" IFMAP Width"].strip())
+    inp_channels = int(row[" Channels"].strip())
 
     fil_height = int(row[" Filter Height"].strip())
     fil_width = int(row[" Filter Width"].strip())
-    fil_channels = int(row[" Channels"].strip())
-    fil_numfilters = out_channels
+    fil_channels = inp_channels
+    fil_numfilters = int(row[" Num Filter"].strip())
 
-    inp_batches = 1
-    inp_height = calcInputDim(out_height, fil_height, stride)
-    inp_width = calcInputDim(out_width, fil_width, stride)
-    inp_channels = fil_channels
+    out_batches = 1
+    out_height = calcOutputDim(inp_height, fil_height, stride)
+    out_width = calcOutputDim(inp_width, fil_width, stride)
+    out_channels = fil_numfilters
 
     vals["N"] = 1
     vals["H"] = out_height
@@ -224,7 +228,7 @@ if __name__ == "__main__":
     benchpath = sys.argv[1]
     if not (os.path.exists(benchpath) and os.path.isdir(benchpath)):
         sys.exit("Path to Benchmarks Incorrect")
-    blockSizes = [8, 16, 32, 64]
+    blockSizes = [8]  #, 16, 32, 64]
     repeat = 3
 
     benchmarks = os.listdir(benchpath)
@@ -263,7 +267,7 @@ if __name__ == "__main__":
                             vals["ORG_BRNCH"].append(res["branches"])
                             vals["ORG_BRMIS"].append(res["branch-misses"])
 
-                            i += 2
+                            i += 1
                             print(f'%s (bs=%s):[%s]' % (bench[:-4], str(blockSize), "*" * i),
                                   end='\r')
 
@@ -285,9 +289,6 @@ if __name__ == "__main__":
                             vals["ORG_INSTR"].append(res["instructions"])
                             vals["ORG_BRNCH"].append(res["branches"])
                             vals["ORG_BRMIS"].append(res["branch-misses"])
-                            i += 1
-                            print(f'%s (bs=%s):[%s]' % (bench[:-4], str(blockSize), "*" * i),
-                                  end='\r')
 
                             res = prepareRunTest(bench, vals, "test1.2.mlir", True, blockSize)
                             vals["REO_TIMES"].append(res["task-clock"])
@@ -319,14 +320,14 @@ if __name__ == "__main__":
                     reo_avg = sum(val["REO_TIMES"]) / len(val["REO_TIMES"])
                     line += str(org_avg) + ',' + str(reo_avg) + ','
                     line += str(org_avg / reo_avg) + ','
-            for bs in blockSizes:
-                val = data[bs][i]
-                if not val["REORDER"]:
-                    for p in perfstats:
+
+            for p in perfstats:
+                for bs in blockSizes:
+                    val = data[bs][i]
+                    if not val["REORDER"]:
                         line += str(sum(val["ORG_" + p]) / len(val["ORG_" + p]))
                         line += ",None,"
-                else:
-                    for p in perfstats:
+                    else:
                         line += str(sum(val["ORG_" + p]) / len(val["ORG_" + p]))
                         line += ','
                         line += str(sum(val["REO_" + p]) / len(val["REO_" + p]))
@@ -334,11 +335,6 @@ if __name__ == "__main__":
             line += '\n'
             outputLines.append(line)
 
-        print(outputLines)
-        print(statsfile)
         cf = open(statsfile, 'w')
         cf.writelines(outputLines)
         cf.close()
-        # original_stdout = sys.stdout
-        # with open(statsfile, 'w') as csvfile:
-        #     csvfile.writelines(outputLines)
