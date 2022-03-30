@@ -64,3 +64,6 @@ build-*/
 # PROSPAR
 pmlc/target/x86/tests/log*
 pmlc/target/x86/tests/temp*
+pmlc/target/x86/tests/script.sh.o*
+pmlc/target/x86/tests/script.sh.e*
+pmlc/target/x86/tests/myeasylog.log

@@ -184,10 +184,6 @@ def parserow(row, blockSize):
     vals["S"] = fil_width
     vals["K"] = fil_numfilters
 
-    if (inp_channels % blockSize != 0) or (out_channels % blockSize != 0):
-        vals["REORDER"] = False
-        # return vals
-
     indims = [inp_batches, inp_height, inp_width, inp_channels]
     vals["INPUT_ORG_DIM"] = str(indims)
     vals["INPUT_ORG_SHAPE"] = getShapeFromDims(indims)
@@ -228,8 +224,9 @@ if __name__ == "__main__":
     benchpath = sys.argv[1]
     if not (os.path.exists(benchpath) and os.path.isdir(benchpath)):
         sys.exit("Path to Benchmarks Incorrect")
-    blockSizes = [8]  #, 16, 32, 64]
-    repeat = 3
+    blockSizes = [4, 8, 16, 32, 64]
+    repeat = 10
+    warmup = 1
 
     benchmarks = os.listdir(benchpath)
     for bench in benchmarks:
@@ -255,83 +252,53 @@ if __name__ == "__main__":
                     # print(vals["S"], end=',')
                     # print(vals["K"])
                     ############################
-                    for iter in range(repeat):
-                        if not vals["REORDER"]:
-                            res = prepareRunTest(bench, vals, "test1.1.mlir", False, blockSize)
-                            vals["ORG_TIMES"].append(res["task-clock"])
-                            vals["ORG_CTXSW"].append(res["context-switches"])
-                            vals["ORG_CPUMI"].append(res["cpu-migrations"])
-                            vals["ORG_PGFLT"].append(res["page-faults"])
-                            vals["ORG_CYCLE"].append(res["cycles"])
-                            vals["ORG_INSTR"].append(res["instructions"])
-                            vals["ORG_BRNCH"].append(res["branches"])
-                            vals["ORG_BRMIS"].append(res["branch-misses"])
+                    for iter in range(repeat + warmup):
+                        res = prepareRunTest(bench, vals, "test1.1.mlir", False, blockSize)
+                        vals["ORG_TIMES"].append(res["task-clock"])
+                        vals["ORG_CTXSW"].append(res["context-switches"])
+                        vals["ORG_CPUMI"].append(res["cpu-migrations"])
+                        vals["ORG_PGFLT"].append(res["page-faults"])
+                        vals["ORG_CYCLE"].append(res["cycles"])
+                        vals["ORG_INSTR"].append(res["instructions"])
+                        vals["ORG_BRNCH"].append(res["branches"])
+                        vals["ORG_BRMIS"].append(res["branch-misses"])
 
-                            i += 1
-                            print(f'%s (bs=%s):[%s]' % (bench[:-4], str(blockSize), "*" * i),
-                                  end='\r')
-
-                            vals["REO_TIMES"].append(None)
-                            vals["REO_CTXSW"].append(None)
-                            vals["REO_CPUMI"].append(None)
-                            vals["REO_PGFLT"].append(None)
-                            vals["REO_CYCLE"].append(None)
-                            vals["REO_INSTR"].append(None)
-                            vals["REO_BRNCH"].append(None)
-                            vals["REO_BRMIS"].append(None)
-                        else:
-                            res = prepareRunTest(bench, vals, "test1.1.mlir", False, blockSize)
-                            vals["ORG_TIMES"].append(res["task-clock"])
-                            vals["ORG_CTXSW"].append(res["context-switches"])
-                            vals["ORG_CPUMI"].append(res["cpu-migrations"])
-                            vals["ORG_PGFLT"].append(res["page-faults"])
-                            vals["ORG_CYCLE"].append(res["cycles"])
-                            vals["ORG_INSTR"].append(res["instructions"])
-                            vals["ORG_BRNCH"].append(res["branches"])
-                            vals["ORG_BRMIS"].append(res["branch-misses"])
-
-                            res = prepareRunTest(bench, vals, "test1.2.mlir", True, blockSize)
-                            vals["REO_TIMES"].append(res["task-clock"])
-                            vals["REO_CTXSW"].append(res["context-switches"])
-                            vals["REO_CPUMI"].append(res["cpu-migrations"])
-                            vals["REO_PGFLT"].append(res["page-faults"])
-                            vals["REO_CYCLE"].append(res["cycles"])
-                            vals["REO_INSTR"].append(res["instructions"])
-                            vals["REO_BRNCH"].append(res["branches"])
-                            vals["REO_BRMIS"].append(res["branch-misses"])
-                            i += 1
-                            print(f'%s (bs=%s):[%s]' % (bench[:-4], str(blockSize), "*" * i),
-                                  end='\r')
+                        res = prepareRunTest(bench, vals, "test1.2.mlir", True, blockSize)
+                        vals["REO_TIMES"].append(res["task-clock"])
+                        vals["REO_CTXSW"].append(res["context-switches"])
+                        vals["REO_CPUMI"].append(res["cpu-migrations"])
+                        vals["REO_PGFLT"].append(res["page-faults"])
+                        vals["REO_CYCLE"].append(res["cycles"])
+                        vals["REO_INSTR"].append(res["instructions"])
+                        vals["REO_BRNCH"].append(res["branches"])
+                        vals["REO_BRMIS"].append(res["branch-misses"])
+                        i += 1
+                        print(f'%s (bs=%d): %d iters done' % (bench[:-4], blockSize, i), end='\r')
 
                     data[blockSize].append(vals)
             print("")
 
+        # Write Stats to log file
         outputLines = []
-        perfstats = ["CTXSW", "CPUMI", "PGFLT", "CYCLE", "INSTR", "BRNCH", "BRMIS"]
+        perfstats = ["TIMES", "CTXSW", "CPUMI", "PGFLT", "INSTR", "BRNCH", "BRMIS"]
         for i in range(len(data[blockSizes[0]])):
             line = data[blockSizes[0]][i]["LAYER"] + ','
             for bs in blockSizes:
                 val = data[bs][i]
-                if not val["REORDER"]:
-                    org_avg = sum(val["ORG_TIMES"]) / len(val["ORG_TIMES"])
-                    line += str(org_avg) + ",None,None,"
-                else:
-                    org_avg = sum(val["ORG_TIMES"]) / len(val["ORG_TIMES"])
-                    reo_avg = sum(val["REO_TIMES"]) / len(val["REO_TIMES"])
-                    line += str(org_avg) + ',' + str(reo_avg) + ','
-                    line += str(org_avg / reo_avg) + ','
+                oc = val["ORG_CYCLE"][warmup:]
+                rc = val["REO_CYCLE"][warmup:]
+                org_avg = sum(oc) / len(oc)
+                reo_avg = sum(rc) / len(rc)
+                line += str(org_avg) + ',' + str(reo_avg) + ','
+                line += str(org_avg / reo_avg) + ','
 
             for p in perfstats:
                 for bs in blockSizes:
                     val = data[bs][i]
-                    if not val["REORDER"]:
-                        line += str(sum(val["ORG_" + p]) / len(val["ORG_" + p]))
-                        line += ",None,"
-                    else:
-                        line += str(sum(val["ORG_" + p]) / len(val["ORG_" + p]))
-                        line += ','
-                        line += str(sum(val["REO_" + p]) / len(val["REO_" + p]))
-                        line += ','
+                    ov = val["ORG_" + p][warmup:]
+                    rv = val["REO_" + p][warmup:]
+                    line += str(sum(ov) / len(ov)) + ','
+                    line += str(sum(rv) / len(rv)) + ','
             line += '\n'
             outputLines.append(line)
 
