@@ -1,3 +1,4 @@
+import configparser
 import csv
 import os
 import re
@@ -65,9 +66,13 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
     finalmlir = "temp.mlir"
     finalllvm = "temp.ll"
     os.system("cp " + testfile + " " + finalmlir)
+
     pseudoBS = blockSize
-    if not vals["REORDER"]:
-        pseudoBS = 1
+    while pseudoBS > 1:
+        if (vals["C"] % pseudoBS) or (vals["K"] % pseudoBS):
+            pseudoBS = int(pseudoBS / 2)
+        else:
+            break
 
     if reordered:
         perf = "logs/" + bench + '.' + vals["LAYER"] + '.' + str(blockSize) + ".REO"
@@ -128,6 +133,7 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
 
     os.remove(finalllvm)
     os.remove(finalmlir)
+    os.remove(perf)
     return res
 
 
@@ -153,7 +159,6 @@ def parserow(row, blockSize):
     vals["REO_BRNCH"] = []
     vals["REO_BRMIS"] = []
 
-    vals["REORDER"] = True
     stride = int(row[" Strides"].strip())
 
     FMAP = "(n, h, w, c, r, s, k) -> (r, s, k, c)"
@@ -221,87 +226,82 @@ def parserow(row, blockSize):
 
 
 if __name__ == "__main__":
-    benchpath = sys.argv[1]
-    if not (os.path.exists(benchpath) and os.path.isdir(benchpath)):
-        sys.exit("Path to Benchmarks Incorrect")
-    blockSizes = [4, 8, 16, 32, 64]
-    repeat = 10
-    warmup = 1
 
-    benchmarks = os.listdir(benchpath)
+    test = sys.argv[1]
+    config = configparser.ConfigParser()
+    config.read('opts.cfg')
+    config = config[test]
+    benchdir = config['BENCHDIR']
+    blist = config['BENCHES'].split(',')
+    benchmarks = [b for b in os.listdir(benchdir) if b in blist]
+    repeat = int(config['REPEAT'])
+    iters = int(config['ITERS'])
+    warmup = int(config['WARMUP'])
+    blockSizes = [int(bs) for bs in config['BLOCKSIZES'].split(',')]
+    mode = config['MODE']
+
+    stats = [
+        "cycles",  # clock cycles elapsed
+        "task-clock",  # time taken (in ms)
+        "context-switches",  # context switches
+        "cpu-migrations",  # CPU migrations
+        "page-faults",  # pge faults
+        "instructions",  # instructions
+        "branches",  # branches
+        "branch-misses"
+    ]  # branch misses
+
     for bench in benchmarks:
-        data = {}
-        statsfile = "logs/" + bench[:-4] + ".log.csv"
-        for blockSize in blockSizes:
-            path = os.path.join(benchpath, bench)
-            headers = False
-            data[blockSize] = []
-            i = 0
+        bf = os.path.join(benchdir, bench)
+        sf = 'logs/' + bench[:-4] + '.log.csv'
+        with open(bf, 'r') as benchfile, open(sf, 'w') as statsfile:
+            reader = csv.DictReader(benchfile)
+            for row in reader:
+                if mode == "printdims":
+                    vals = parserow(row, blockSizes[0])
+                    print(vals["LAYER"], end=',')
+                    print(vals["N"], end=',')
+                    print(vals["H"], end=',')
+                    print(vals["W"], end=',')
+                    print(vals["C"], end=',')
+                    print(vals["R"], end=',')
+                    print(vals["S"], end=',')
+                    print(vals["K"])
+                elif mode == "runtests":
+                    data = {}
+                    for bs in blockSizes:
+                        data[bs] = {"ORG": {}, "REO": {}}
+                        for s in stats:
+                            data[bs]["ORG"][s] = []
+                            data[bs]["REO"][s] = []
 
-            with open(path, 'r') as datafile:
-                reader = csv.DictReader(datafile)
-                for row in reader:
-                    vals = parserow(row, blockSize)
-                    ############################
-                    # print(vals["LAYER"], end=',')
-                    # print(vals["N"], end=',')
-                    # print(vals["H"], end=',')
-                    # print(vals["W"], end=',')
-                    # print(vals["C"], end=',')
-                    # print(vals["R"], end=',')
-                    # print(vals["S"], end=',')
-                    # print(vals["K"])
-                    ############################
-                    for iter in range(repeat + warmup):
-                        res = prepareRunTest(bench, vals, "test1.1.mlir", False, blockSize)
-                        vals["ORG_TIMES"].append(res["task-clock"])
-                        vals["ORG_CTXSW"].append(res["context-switches"])
-                        vals["ORG_CPUMI"].append(res["cpu-migrations"])
-                        vals["ORG_PGFLT"].append(res["page-faults"])
-                        vals["ORG_CYCLE"].append(res["cycles"])
-                        vals["ORG_INSTR"].append(res["instructions"])
-                        vals["ORG_BRNCH"].append(res["branches"])
-                        vals["ORG_BRMIS"].append(res["branch-misses"])
+                    for rep in range(warmup + repeat):
+                        for bs in blockSizes:
+                            vals = parserow(row, bs)
+                            prog = ""
+                            for iter in range(iters):
+                                res = prepareRunTest(bench, vals, "test1.1.mlir", False, bs)
+                                if rep >= warmup:
+                                    for s in stats:
+                                        data[bs]["ORG"][s].append(res[s])
 
-                        res = prepareRunTest(bench, vals, "test1.2.mlir", True, blockSize)
-                        vals["REO_TIMES"].append(res["task-clock"])
-                        vals["REO_CTXSW"].append(res["context-switches"])
-                        vals["REO_CPUMI"].append(res["cpu-migrations"])
-                        vals["REO_PGFLT"].append(res["page-faults"])
-                        vals["REO_CYCLE"].append(res["cycles"])
-                        vals["REO_INSTR"].append(res["instructions"])
-                        vals["REO_BRNCH"].append(res["branches"])
-                        vals["REO_BRMIS"].append(res["branch-misses"])
-                        i += 1
-                        print(f'%s (bs=%d): %d iters done' % (bench[:-4], blockSize, i), end='\r')
+                                res = prepareRunTest(bench, vals, "test1.2.mlir", True, bs)
+                                if rep >= warmup:
+                                    for s in stats:
+                                        data[bs]["REO"][s].append(res[s])
 
-                    data[blockSize].append(vals)
-            print("")
+                                prog += '*'
+                                print(f'%s\t%s\tRepeat=%d\tbs=%d\t%s' %
+                                      (bench[:-4], vals["LAYER"], rep + 1, bs, prog),
+                                      end='\r')
+                            print("")
 
-        # Write Stats to log file
-        outputLines = []
-        perfstats = ["TIMES", "CTXSW", "CPUMI", "PGFLT", "INSTR", "BRNCH", "BRMIS"]
-        for i in range(len(data[blockSizes[0]])):
-            line = data[blockSizes[0]][i]["LAYER"] + ','
-            for bs in blockSizes:
-                val = data[bs][i]
-                oc = val["ORG_CYCLE"][warmup:]
-                rc = val["REO_CYCLE"][warmup:]
-                org_avg = sum(oc) / len(oc)
-                reo_avg = sum(rc) / len(rc)
-                line += str(org_avg) + ',' + str(reo_avg) + ','
-                line += str(org_avg / reo_avg) + ','
-
-            for p in perfstats:
-                for bs in blockSizes:
-                    val = data[bs][i]
-                    ov = val["ORG_" + p][warmup:]
-                    rv = val["REO_" + p][warmup:]
-                    line += str(sum(ov) / len(ov)) + ','
-                    line += str(sum(rv) / len(rv)) + ','
-            line += '\n'
-            outputLines.append(line)
-
-        cf = open(statsfile, 'w')
-        cf.writelines(outputLines)
-        cf.close()
+                    # write down the stats in csv format
+                    outline = vals["LAYER"] + ","
+                    for stat in stats:
+                        for bs in blockSizes:
+                            oc = data[bs]["ORG"][stat]
+                            rc = data[bs]["REO"][stat]
+                            outline += str(sum(oc) / len(oc)) + ','
+                            outline += str(sum(rc) / len(rc)) + ','
+                    statsfile.write(outline + '\n')
