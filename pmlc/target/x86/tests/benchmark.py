@@ -1,5 +1,6 @@
 import configparser
 import csv
+import math
 import os
 import re
 import shutil
@@ -65,6 +66,7 @@ def getInputMap(reordered, stride):
 def prepareRunTest(bench, vals, testfile, reordered, blockSize):
     finalmlir = "temp.mlir"
     finalllvm = "temp.ll"
+    outfile = "temp.out"
     os.system("cp " + testfile + " " + finalmlir)
 
     pseudoBS = blockSize
@@ -75,19 +77,17 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
             break
 
     if reordered:
-        perf = "logs/" + bench + '.' + vals["LAYER"] + '.' + str(blockSize) + ".REO"
         key = "REO"
         pass_index = 2
     else:
-        perf = "logs/" + bench + '.' + vals["LAYER"] + '.' + str(blockSize) + ".ORG"
         key = "ORG"
         pass_index = 0
 
     tensors = ["INPUT", "FILTER", "OUTPUT"]
     objs = ["DIM", "SHAPE", "MAP"]
     passes = [
-        " -x86-reorder-layouts", " -cse", " -convert-linalg-to-pxa", " -convert-pxa-to-affine",
-        " -x86-stage3", " -x86-stage4"
+        " -x86-reorder-layouts", " -cse", " -convert-linalg-to-pxa", " -x86-profile-kernels",
+        " -convert-pxa-to-affine", " -x86-stage3", " -x86-stage4"
     ]
 
     for tensor in tensors:
@@ -106,35 +106,19 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
     repl = "// llvm.call @print_memref_f32\("
     sed_inplace(finalllvm, pattern, repl)
 
-    cmd = 'perf stat -x, -d -d -d -o ' + perf + ' -- pmlc-jit -e prospar ' + finalllvm
+    cmd = 'pmlc-jit -e prospar ' + finalllvm + ' > ' + outfile
     os.system(cmd)
 
-    res = {}
-    with open(perf, 'r') as f:
-        l = f.readlines()
-        for x in l:
-            z = x.split(",")
-            if "task-clock" in z:
-                res["task-clock"] = float(z[0])
-            if "context-switches" in z:
-                res["context-switches"] = int(z[0])
-            if "cpu-migrations" in z:
-                res["cpu-migrations"] = int(z[0])
-            if "page-faults" in z:
-                res["page-faults"] = int(z[0])
-            if "cycles" in z:
-                res["cycles"] = int(z[0])
-            if "instructions" in z:
-                res["instructions"] = int(z[0])
-            if "branches" in z:
-                res["branches"] = int(z[0])
-            if "branch-misses" in z:
-                res["branch-misses"] = int(z[0])
+    f = open(outfile, 'r')
+    lines = f.readlines()
+    line = lines[-1]
+    usecs = float(line.split(',')[-1][:-1])
+    f.close()
 
     os.remove(finalllvm)
     os.remove(finalmlir)
-    os.remove(perf)
-    return res
+    os.remove(outfile)
+    return usecs * 1000  # output milliseconds
 
 
 def parserow(row, blockSize):
@@ -240,17 +224,6 @@ if __name__ == "__main__":
     blockSizes = [int(bs) for bs in config['BLOCKSIZES'].split(',')]
     mode = config['MODE']
 
-    stats = [
-        "cycles",  # clock cycles elapsed
-        "task-clock",  # time taken (in ms)
-        "context-switches",  # context switches
-        "cpu-migrations",  # CPU migrations
-        "page-faults",  # pge faults
-        "instructions",  # instructions
-        "branches",  # branches
-        "branch-misses"
-    ]  # branch misses
-
     for bench in benchmarks:
         bf = os.path.join(benchdir, bench)
         sf = 'logs/' + bench[:-4] + '.log.csv'
@@ -270,25 +243,20 @@ if __name__ == "__main__":
                 elif mode == "runtests":
                     data = {}
                     for bs in blockSizes:
-                        data[bs] = {"ORG": {}, "REO": {}}
-                        for s in stats:
-                            data[bs]["ORG"][s] = []
-                            data[bs]["REO"][s] = []
+                        data[bs] = {"ORG": [], "REO": []}
 
-                    for rep in range(warmup + repeat):
+                    for rep in range(repeat):
                         for bs in blockSizes:
                             vals = parserow(row, bs)
                             prog = ""
-                            for iter in range(iters):
+                            for iter in range(iters + warmup):
                                 res = prepareRunTest(bench, vals, "test1.1.mlir", False, bs)
-                                if rep >= warmup:
-                                    for s in stats:
-                                        data[bs]["ORG"][s].append(res[s])
+                                if iter >= warmup:
+                                    data[bs]["ORG"].append(res)
 
                                 res = prepareRunTest(bench, vals, "test1.2.mlir", True, bs)
-                                if rep >= warmup:
-                                    for s in stats:
-                                        data[bs]["REO"][s].append(res[s])
+                                if iter >= warmup:
+                                    data[bs]["REO"].append(res)
 
                                 prog += '*'
                                 print(f'%s\t%s\tRepeat=%d\tbs=%d\t%s' %
@@ -298,10 +266,9 @@ if __name__ == "__main__":
 
                     # write down the stats in csv format
                     outline = vals["LAYER"] + ","
-                    for stat in stats:
-                        for bs in blockSizes:
-                            oc = data[bs]["ORG"][stat]
-                            rc = data[bs]["REO"][stat]
-                            outline += str(sum(oc) / len(oc)) + ','
-                            outline += str(sum(rc) / len(rc)) + ','
+                    for bs in blockSizes:
+                        oc = data[bs]["ORG"]
+                        rc = data[bs]["REO"]
+                        outline += str(sum(oc) / len(oc)) + ','
+                        outline += str(sum(rc) / len(rc)) + ','
                     statsfile.write(outline + '\n')
