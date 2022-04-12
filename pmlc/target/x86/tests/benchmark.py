@@ -48,25 +48,19 @@ def getShapeFromDims(dims):
     return shape
 
 
-def getInputMap(reordered, stride):
+def getInputMap(stride):
     map = ""
-    if reordered:
-        map = "(d0, d1, d2, d3, d4, d5, d6, d7, d8)"
-        map += " -> "
-        map += "(d0, d8, d1 * " + str(stride) + " + d4,"
-        map += " d2 * " + str(stride) + " + d5, d6)"
-    else:
-        map = "(n, h, w, c, r, s, k)"
-        map += " -> "
-        map += "(n, h * " + str(stride) + " + r,"
-        map += " w * " + str(stride) + " + s, k)"
+    map = "(n, h, w, c, r, s, k)"
+    map += " -> "
+    map += "(n, h * " + str(stride) + " + r,"
+    map += " w * " + str(stride) + " + s, k)"
     return map
 
 
 def prepareRunTest(bench, vals, testfile, reordered, blockSize):
     finalmlir = "temp.mlir"
     finalllvm = "temp.ll"
-    outfile = "temp.out"
+    outfile = "logs/temp.out" + vals["LAYER"]
     os.system("cp " + testfile + " " + finalmlir)
 
     pseudoBS = blockSize
@@ -76,12 +70,8 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
         else:
             break
 
-    if reordered:
-        key = "REO"
-        pass_index = 2
-    else:
-        key = "ORG"
-        pass_index = 0
+    line_index = -3  # line in profiling output file that contains conv time
+    col_index = 3  # col of line that contains elapsed time
 
     tensors = ["INPUT", "FILTER", "OUTPUT"]
     objs = ["DIM", "SHAPE", "MAP"]
@@ -93,11 +83,11 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
     for tensor in tensors:
         for obj in objs:
             pattern = "__" + tensor + "_" + obj + "__"
-            repl = vals[tensor + "_" + key + "_" + obj]
+            repl = vals[tensor + "_" + obj]
             sed_inplace(finalmlir, pattern, repl)
 
     cmd = "pmlc-opt-" + str(pseudoBS)
-    for pass_ in passes[pass_index:]:
+    for pass_ in passes:
         cmd += pass_
     cmd += " " + finalmlir + " > " + finalllvm
     os.system(cmd)
@@ -111,8 +101,8 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
 
     f = open(outfile, 'r')
     lines = f.readlines()
-    line = lines[-1]
-    usecs = float(line.split(',')[-1][:-1])
+    line = lines[line_index]
+    usecs = float(line.split(',')[col_index])
     f.close()
 
     os.remove(finalllvm)
@@ -124,24 +114,6 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
 def parserow(row, blockSize):
     vals = {}
     vals["LAYER"] = row["Layer name"]
-
-    vals["ORG_TIMES"] = []
-    vals["ORG_CTXSW"] = []
-    vals["ORG_CPUMI"] = []
-    vals["ORG_PGFLT"] = []
-    vals["ORG_CYCLE"] = []
-    vals["ORG_INSTR"] = []
-    vals["ORG_BRNCH"] = []
-    vals["ORG_BRMIS"] = []
-
-    vals["REO_TIMES"] = []
-    vals["REO_CTXSW"] = []
-    vals["REO_CPUMI"] = []
-    vals["REO_PGFLT"] = []
-    vals["REO_CYCLE"] = []
-    vals["REO_INSTR"] = []
-    vals["REO_BRNCH"] = []
-    vals["REO_BRMIS"] = []
 
     stride = int(row[" Strides"].strip())
 
@@ -174,37 +146,19 @@ def parserow(row, blockSize):
     vals["K"] = fil_numfilters
 
     indims = [inp_batches, inp_height, inp_width, inp_channels]
-    vals["INPUT_ORG_DIM"] = str(indims)
-    vals["INPUT_ORG_SHAPE"] = getShapeFromDims(indims)
-    vals["INPUT_ORG_MAP"] = getInputMap(reordered=False, stride=stride)
-
-    rindims = [inp_batches, int(inp_channels / blockSize), inp_height, inp_width, blockSize]
-    vals["INPUT_REO_DIM"] = str(rindims)
-    vals["INPUT_REO_SHAPE"] = getShapeFromDims(rindims)
-    vals["INPUT_REO_MAP"] = getInputMap(reordered=True, stride=stride)
+    vals["INPUT_DIM"] = str(indims)
+    vals["INPUT_SHAPE"] = getShapeFromDims(indims)
+    vals["INPUT_MAP"] = getInputMap(stride=stride)
 
     fdims = [fil_height, fil_width, fil_channels, fil_numfilters]
-    vals["FILTER_ORG_DIM"] = str(fdims)
-    vals["FILTER_ORG_SHAPE"] = getShapeFromDims(fdims)
-    vals["FILTER_ORG_MAP"] = FMAP
-
-    rfdims = [
-        int(fil_channels / blockSize),
-        int(fil_numfilters / blockSize), fil_height, fil_width, blockSize, blockSize
-    ]
-    vals["FILTER_REO_DIM"] = str(rfdims)
-    vals["FILTER_REO_SHAPE"] = getShapeFromDims(rfdims)
-    vals["FILTER_REO_MAP"] = RFMAP
+    vals["FILTER_DIM"] = str(fdims)
+    vals["FILTER_SHAPE"] = getShapeFromDims(fdims)
+    vals["FILTER_MAP"] = FMAP
 
     odims = [out_batches, out_height, out_width, out_channels]
-    vals["OUTPUT_ORG_DIM"] = str(odims)
-    vals["OUTPUT_ORG_SHAPE"] = getShapeFromDims(odims)
-    vals["OUTPUT_ORG_MAP"] = OMAP
-
-    rodims = [out_batches, int(out_channels / blockSize), out_height, out_width, blockSize]
-    vals["OUTPUT_REO_DIM"] = str(rodims)
-    vals["OUTPUT_REO_SHAPE"] = getShapeFromDims(rodims)
-    vals["OUTPUT_REO_MAP"] = ROMAP
+    vals["OUTPUT_DIM"] = str(odims)
+    vals["OUTPUT_SHAPE"] = getShapeFromDims(odims)
+    vals["OUTPUT_MAP"] = OMAP
 
     return vals
 
@@ -243,7 +197,7 @@ if __name__ == "__main__":
                 elif mode == "runtests":
                     data = {}
                     for bs in blockSizes:
-                        data[bs] = {"ORG": [], "REO": []}
+                        data[bs] = []
 
                     for rep in range(repeat):
                         for bs in blockSizes:
@@ -252,11 +206,7 @@ if __name__ == "__main__":
                             for iter in range(iters + warmup):
                                 res = prepareRunTest(bench, vals, "test1.1.mlir", False, bs)
                                 if iter >= warmup:
-                                    data[bs]["ORG"].append(res)
-
-                                res = prepareRunTest(bench, vals, "test1.2.mlir", True, bs)
-                                if iter >= warmup:
-                                    data[bs]["REO"].append(res)
+                                    data[bs].append(res)
 
                                 prog += '*'
                                 print(f'%s\t%s\tRepeat=%d\tbs=%d\t%s' %
@@ -267,8 +217,6 @@ if __name__ == "__main__":
                     # write down the stats in csv format
                     outline = vals["LAYER"] + ","
                     for bs in blockSizes:
-                        oc = data[bs]["ORG"]
-                        rc = data[bs]["REO"]
+                        oc = data[bs]
                         outline += str(sum(oc) / len(oc)) + ','
-                        outline += str(sum(rc) / len(rc)) + ','
                     statsfile.write(outline + '\n')

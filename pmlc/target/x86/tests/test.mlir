@@ -1,4 +1,4 @@
-// pmlc-opt --x86-reorder-layouts -cse  --convert-linalg-to-pxa  --convert-pxa-to-affine -x86-stage3 -x86-stage4 %s
+// pmlc-opt --x86-reorder-layouts -cse  --convert-linalg-to-pxa --x86-profile-kernels --convert-pxa-to-affine -x86-stage3 -x86-stage4 %s
 
 func private @print_memref_f32(tensor<1x56x56x64xf32>)
 
