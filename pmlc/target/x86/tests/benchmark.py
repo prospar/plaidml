@@ -70,15 +70,20 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
         else:
             break
 
-    line_index = -3  # line in profiling output file that contains conv time
-    col_index = 3  # col of line that contains elapsed time
-
     tensors = ["INPUT", "FILTER", "OUTPUT"]
     objs = ["DIM", "SHAPE", "MAP"]
+    # passes = [
+    #     " -x86-reorder-layouts", " -cse", " -convert-linalg-to-pxa", " -x86-profile-kernels",
+    #     " -convert-pxa-to-affine", " -x86-stage3", " -x86-stage4"
+    # ]
+    # line_index = -3  # line in profiling output file that contains conv time
+    # col_index = 3  # col of line that contains elapsed time
     passes = [
-        " -x86-reorder-layouts", " -cse", " -convert-linalg-to-pxa", " -x86-profile-kernels",
-        " -convert-pxa-to-affine", " -x86-stage3", " -x86-stage4"
+        " -x86-reorder-layouts", " -cse", " -convert-linalg-to-pxa", " -x86-stage2",
+        " -x86-stage3", " -x86-stage4"
     ]
+    line_index = -1  # line in profiling output file that contains conv time
+    col_index = 3  # col of line that contains elapsed time
 
     for tensor in tensors:
         for obj in objs:
