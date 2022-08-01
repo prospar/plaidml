@@ -11,6 +11,8 @@
 // latter.
 //===----------------------------------------------------------------------===//
 
+#include <papi.h>
+
 #include <memory>
 #include <stdexcept>
 
@@ -29,6 +31,13 @@
 #include "pmlc/rt/executable.h"
 #include "pmlc/rt/runtime_registry.h"
 #include "pmlc/util/logging.h"
+
+#define NUM_EVENT 5
+#define ERROR_RETURN(retval)                                                   \
+  {                                                                            \
+    fprintf(stderr, "Error %d %s:line %d: \n", retval, __FILE__, __LINE__);    \
+    exit(retval);                                                              \
+  }
 
 using namespace mlir; // NOLINT
 using llvm::Error;
@@ -107,10 +116,48 @@ int JitRunnerMain(int argc, char **argv) {
     program->parseIOTypes(std::move(sourceFile));
   }
 
+  int retval;
+  int EventSet = PAPI_NULL;
+  int event_codes[NUM_EVENT] = {PAPI_TOT_INS, PAPI_TOT_CYC, PAPI_L1_DCM,
+                                PAPI_L2_TCM, PAPI_L3_TCM};
+  char errstring[PAPI_MAX_STR_LEN];
+  int64 values[NUM_EVENT];
+
+  if ((retval = PAPI_library_init(PAPI_VER_CURRENT)) != PAPI_VER_CURRENT) {
+    fprintf(stderr, "Error: %s\n", errstring);
+    exit(1);
+  }
+
+  if ((retval = PAPI_create_eventset(&EventSet)) != PAPI_OK)
+    ERROR_RETURN(retval);
+
+  if ((retval = PAPI_add_events(EventSet, event_codes, NUM_EVENT)) != PAPI_OK)
+    ERROR_RETURN(retval);
+
   auto executable =
       Executable::fromProgram(program, options.deviceId.getValue());
-  for (unsigned i = 0; i < options.iterations.getValue(); i++)
+  for (unsigned i = 0; i < options.iterations.getValue(); i++) {
+    if ((retval = PAPI_start(EventSet)) != PAPI_OK)
+      ERROR_RETURN(retval);
+
     executable->invoke();
+
+    if ((retval = PAPI_stop(EventSet, values)) != PAPI_OK)
+      ERROR_RETURN(retval);
+  }
+
+  for (int i = 0; i < NUM_EVENT; ++i)
+    printf("%lld,", values[i]);
+  printf("\n");
+
+  if ((retval = PAPI_remove_events(EventSet, event_codes, NUM_EVENT)) !=
+      PAPI_OK)
+    ERROR_RETURN(retval);
+
+  if ((retval = PAPI_destroy_eventset(&EventSet)) != PAPI_OK)
+    ERROR_RETURN(retval);
+
+  PAPI_shutdown();
 
   return EXIT_SUCCESS;
 }

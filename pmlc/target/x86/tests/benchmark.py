@@ -8,6 +8,13 @@ import sys
 import tempfile
 
 
+def dict_mean(dict_list):
+    mean_dict = {}
+    for key in dict_list[0].keys():
+        mean_dict[key] = sum(d[key] for d in dict_list) / len(dict_list)
+    return mean_dict
+
+
 def sed_inplace(filename, pattern, repl):
     '''
     Perform the pure-Python equivalent of in-place `sed` substitution: e.g.,
@@ -57,7 +64,7 @@ def getInputMap(stride):
     return map
 
 
-def prepareRunTest(bench, vals, testfile, reordered, blockSize):
+def prepareRunTest(bench, vals, testfile, reordered, blockSize, rec_stats):
     finalmlir = "temp.mlir"
     finalllvm = "temp.ll"
     outfile = "logs/temp.out" + vals["LAYER"]
@@ -82,7 +89,7 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
         " -x86-reorder-layouts", " -cse", " -convert-linalg-to-pxa", " -x86-stage2",
         " -x86-stage3", " -x86-stage4"
     ]
-    line_index = -1  # line in profiling output file that contains conv time
+    line_index = -2  # line in profiling output file that contains conv time
     col_index = 3  # col of line that contains elapsed time
 
     for tensor in tensors:
@@ -104,16 +111,28 @@ def prepareRunTest(bench, vals, testfile, reordered, blockSize):
     cmd = 'pmlc-jit -e prospar ' + finalllvm + ' > ' + outfile
     os.system(cmd)
 
+    stats = {}
     f = open(outfile, 'r')
     lines = f.readlines()
+    print(lines)
     line = lines[line_index]
-    usecs = float(line.split(',')[col_index])
+    stats['time'] = float(line.split(',')[col_index])
+
+    line = lines[-1]
+    papi_stats = line.split(',')
+    for k in range(len(rec_stats) - 1):
+        key = rec_stats[1 + k]
+        try:
+            stats[key] = int(papi_stats[k])
+        except:
+            stats[key] = 0
+
     f.close()
 
     os.remove(finalllvm)
     os.remove(finalmlir)
     os.remove(outfile)
-    return usecs * 1000  # output milliseconds
+    return stats  # output milliseconds
 
 
 def parserow(row, blockSize):
@@ -176,12 +195,13 @@ if __name__ == "__main__":
     config = config[test]
     benchdir = config['BENCHDIR']
     blist = config['BENCHES'].split(',')
-    benchmarks = [b for b in os.listdir(benchdir) if b in blist]
+    benchmarks = [b for b in os.listdir(benchdir) if b in blist or "ALL" in blist]
     repeat = int(config['REPEAT'])
     iters = int(config['ITERS'])
     warmup = int(config['WARMUP'])
     blockSizes = [int(bs) for bs in config['BLOCKSIZES'].split(',')]
     mode = config['MODE']
+    recstats = ['time', 'instructions', 'cycles', 'l1dcm', 'l2tcm', 'l3tcm']
 
     for bench in benchmarks:
         bf = os.path.join(benchdir, bench)
@@ -209,7 +229,8 @@ if __name__ == "__main__":
                             vals = parserow(row, bs)
                             prog = ""
                             for iter in range(iters + warmup):
-                                res = prepareRunTest(bench, vals, "test1.1.mlir", False, bs)
+                                res = prepareRunTest(bench, vals, "test1.1.mlir", False, bs,
+                                                     recstats)
                                 if iter >= warmup:
                                     data[bs].append(res)
 
@@ -219,9 +240,14 @@ if __name__ == "__main__":
                                       end='\r')
                             print("")
 
-                    # write down the stats in csv format
-                    outline = vals["LAYER"] + ","
+                    # average all stats over repeat iters
+                    finalstats = {}
                     for bs in blockSizes:
-                        oc = data[bs]
-                        outline += str(sum(oc) / len(oc)) + ','
+                        finalstats[bs] = dict_mean(data[bs])
+
+                    # write down all stats in CSV format
+                    outline = vals["LAYER"] + ","
+                    for item in recstats:
+                        for bs in blockSizes:
+                            outline += str(finalstats[bs][item]) + ','
                     statsfile.write(outline + '\n')
